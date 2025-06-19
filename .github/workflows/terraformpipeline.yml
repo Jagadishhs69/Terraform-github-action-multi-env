@@ -1,0 +1,84 @@
+name: Terraform Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (dev, qa)'
+        required: true
+        default: 'dev'
+
+env:
+  TF_VERSION: '1.6.6'
+  TF_WORKING_DIR: './'
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+
+    outputs:
+      artifact-name: ${{ steps.set-artifact-name.outputs.name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set artifact name
+        id: set-artifact-name
+        run: echo "name=tfplan-${{ github.run_id }}" >> $GITHUB_OUTPUT
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init Terraform
+        run: terraform init
+
+      - name: Select Environment
+        run: echo "Selected Environment:${{ github.event.inputs.environment }}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan -var-file="envs/${{ github.event.inputs.environment }}/terraform.tfvars" -out=tfplan
+          terraform show -json tfplan > tfplan.json
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.set-artifact-name.outputs.name }}
+          path: |
+            tfplan
+            tfplan.json
+
+  terraform-apply:
+    name: Terraform Apply
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init Terraform
+        run: terraform init
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
